@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Smart Image Tagger</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f5f4fe;
+         display: flex; justify-content: center; padding: 3rem 1rem; min-height: 100vh; }
+  .card { background: #fff; border-radius: 14px; padding: 2rem;
+          max-width: 580px; width: 100%; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+  h1 { font-size: 1.3rem; font-weight: 600; color: #1a1133; margin-bottom: .3rem; }
+  .sub { font-size: .9rem; color: #888; margin-bottom: 1.5rem; }
+
+  /* Drop zone */
+  #drop-zone { border: 2px dashed #c4bff5; border-radius: 10px;
+               padding: 2.5rem 1.5rem; text-align: center; cursor: pointer;
+               transition: border-color .2s, background .2s; color: #888; font-size: .9rem; }
+  #drop-zone.hover { border-color: #5340b5; background: #f0eeff; }
+  #drop-zone input { display: none; }
+  #drop-zone .icon { font-size: 2.2rem; margin-bottom: .5rem; color: #b0a8f0; }
+
+  /* Preview */
+  #preview-wrap { margin-top: 1.25rem; display: none; }
+  #preview { max-width: 100%; border-radius: 8px; display: block; }
+
+  /* Results */
+  #result { margin-top: 1.5rem; display: none; }
+  .section-title { font-size: .75rem; font-weight: 600; color: #aaa;
+                   text-transform: uppercase; letter-spacing: .06em; margin-bottom: .5rem; }
+
+  /* Caption */
+  .caption-box { background: #f0eeff; border-radius: 8px; padding: .75rem 1rem;
+                 margin-bottom: 1.25rem; }
+  .caption-text { font-size: 1rem; color: #1a1133; font-weight: 500; }
+  .caption-conf { font-size: .8rem; color: #7b6fd0; margin-top: .2rem; }
+
+  /* Tags */
+  .tag-list { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 1.25rem; }
+  .tag { display: flex; align-items: center; gap: 5px; padding: .28rem .75rem;
+         border-radius: 20px; font-size: .82rem; font-weight: 500; }
+  .tag.high   { background: #d1fae5; color: #065f46; }
+  .tag.medium { background: #ede9fe; color: #3c3489; }
+  .tag.low    { background: #f3f4f6; color: #555; }
+  .tag .conf  { font-size: .72rem; opacity: .7; }
+
+  /* OCR */
+  .ocr-box { background: #f8f7ff; border: 1px solid #e5e4f0; border-radius: 8px;
+             padding: .75rem 1rem; font-size: .9rem; color: #333;
+             white-space: pre-wrap; font-family: monospace; }
+  .ocr-empty { color: #aaa; font-style: italic; font-size: .85rem; font-family: system-ui; }
+
+  /* Objects */
+  .obj-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 1.25rem; }
+  .obj-row { display: flex; align-items: center; gap: 10px; font-size: .88rem; }
+  .obj-bar-wrap { flex: 1; height: 6px; background: #ede9fe; border-radius: 3px; overflow: hidden; }
+  .obj-bar { height: 100%; border-radius: 3px; background: #5340b5; }
+  .obj-name { width: 120px; color: #1a1133; font-weight: 500; }
+  .obj-pct  { width: 36px; text-align: right; color: #7b6fd0; font-size: .8rem; }
+
+  #error { color: #b91c1c; font-size: .88rem; margin-top: .75rem; display: none; }
+  #loading { display: none; margin-top: 1rem; color: #888; font-size: .9rem; text-align: center; }
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid #e0dcff;
+             border-top-color: #5340b5; border-radius: 50%; animation: spin .7s linear infinite;
+             vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Smart Image Tagger</h1>
+  <p class="sub">Drop any image — get AI captions, tags, and extracted text instantly.</p>
+
+  <div id="drop-zone" onclick="document.getElementById('file-input').click()"
+       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+    <input type="file" id="file-input" accept="image/*" onchange="handleFile(this.files[0])">
+    <div class="icon">🖼️</div>
+    <div>Drag & drop an image, or <strong>click to browse</strong></div>
+    <div style="font-size:.8rem;margin-top:.3rem;">JPG, PNG, GIF, BMP up to 4 MB</div>
+  </div>
+
+  <div id="preview-wrap"><img id="preview" alt="Uploaded image preview"></div>
+  <div id="loading"><span class="spinner"></span>Analysing with Azure AI Vision…</div>
+  <div id="error"></div>
+
+  <div id="result">
+    <!-- Caption -->
+    <div class="section-title">Caption</div>
+    <div class="caption-box">
+      <div class="caption-text" id="caption-text"></div>
+      <div class="caption-conf" id="caption-conf"></div>
+    </div>
+
+    <!-- Tags -->
+    <div class="section-title">Tags</div>
+    <div class="tag-list" id="tag-list"></div>
+
+    <!-- Objects -->
+    <div class="section-title" id="obj-title" style="display:none">Objects detected</div>
+    <div class="obj-list" id="obj-list"></div>
+
+    <!-- OCR -->
+    <div class="section-title">Text in image (OCR)</div>
+    <div class="ocr-box" id="ocr-box"></div>
+  </div>
+</div>
+
+<script>
+// ⚠️ Production note: proxy through an Azure Function to keep this key server-side.
+const ENDPOINT = "https://<your-resource>.cognitiveservices.azure.com/";
+const KEY      = "<your-key>";
+
+function onDragOver(e)  { e.preventDefault(); document.getElementById('drop-zone').classList.add('hover'); }
+function onDragLeave(e) { document.getElementById('drop-zone').classList.remove('hover'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('hover');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+}
+
+async function handleFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  if (file.size > 4 * 1024 * 1024) {
+    showError("Image must be under 4 MB."); return;
+  }
+
+  // Show preview
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('preview').src = e.target.result;
+    document.getElementById('preview-wrap').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+
+  document.getElementById('result').style.display = 'none';
+  document.getElementById('error').style.display = 'none';
+  document.getElementById('loading').style.display = 'block';
+
+  try {
+    const imgData = await file.arrayBuffer();
+    const features = "Caption,Tags,Objects,Read";
+    const url = `${ENDPOINT}computervision/imageanalysis:analyze?api-version=2024-02-01&features=${features}&gender-neutral-caption=true`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Ocp-Apim-Subscription-Key": KEY, "Content-Type": "application/octet-stream" },
+      body: imgData
+    });
+    if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    renderResults(data);
+  } catch(e) {
+    showError("Something went wrong: " + e.message);
+  } finally {
+    document.getElementById('loading').style.display = 'none';
+  }
+}
+
+function renderResults(data) {
+  // Caption
+  const cap = data.captionResult;
+  document.getElementById('caption-text').textContent = cap ? cap.text : "No caption available.";
+  document.getElementById('caption-conf').textContent = cap ? `Confidence: ${(cap.confidence * 100).toFixed(0)}%` : "";
+
+  // Tags
+  const tagList = document.getElementById('tag-list');
+  tagList.innerHTML = "";
+  (data.tagsResult?.values || [])
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 14)
+    .forEach(t => {
+      const cls = t.confidence > .85 ? "high" : t.confidence > .6 ? "medium" : "low";
+      tagList.innerHTML += `<span class="tag ${cls}">${t.name} <span class="conf">${(t.confidence*100).toFixed(0)}%</span></span>`;
+    });
+
+  // Objects
+  const objs = data.objectsResult?.values || [];
+  const objList = document.getElementById('obj-list');
+  const objTitle = document.getElementById('obj-title');
+  objList.innerHTML = "";
+  if (objs.length) {
+    objTitle.style.display = 'block';
+    objs.slice(0, 6).forEach(o => {
+      const name = o.tags?.[0]?.name || "object";
+      const conf = o.tags?.[0]?.confidence || 0;
+      objList.innerHTML += `
+        <div class="obj-row">
+          <span class="obj-name">${name}</span>
+          <div class="obj-bar-wrap"><div class="obj-bar" style="width:${(conf*100).toFixed(0)}%"></div></div>
+          <span class="obj-pct">${(conf*100).toFixed(0)}%</span>
+        </div>`;
+    });
+  }
+
+  // OCR
+  const ocrBox = document.getElementById('ocr-box');
+  const blocks = data.readResult?.blocks || [];
+  const lines = blocks.flatMap(b => b.lines.map(l => l.text));
+  ocrBox.innerHTML = lines.length
+    ? lines.join("\n")
+    : '<span class="ocr-empty">No text detected in this image.</span>';
+
+  document.getElementById('result').style.display = 'block';
+}
+
+function showError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg; el.style.display = 'block';
+  document.getElementById('loading').style.display = 'none';
+}
+</script>
+</body>
+</html>
